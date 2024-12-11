@@ -1,10 +1,10 @@
-# Get funds from users
-# Withdraw funds
-# Set a minimum funding value in USD
-
 # pragma version 0.4.0
-# @license: MIT
-# @author: s3bc40
+"""
+@license MIT
+@title Buy Me A Coffee
+@author s3bc40
+@notice This contract is for creating buy me a coffee
+"""
 
 interface AggregatorV3Interface:
     def decimals() -> uint256: view
@@ -13,33 +13,56 @@ interface AggregatorV3Interface:
     def latestAnswer() -> int256: view
     def latestRoundData() -> (int256,int256,int256,uint256,uint256): view
 
-minimum_usd: uint256
-price_feed: AggregatorV3Interface # 0x694AA1769357215DE4FAC081bf1f309aDC325306 sepolia
-owner: public(address)
+# Constants & Immutables
+MINIMUN_USD: public(constant(uint256)) = as_wei_value(5, "ether")
+PRICE_FEED: public(immutable(AggregatorV3Interface)) # 0x694AA1769357215DE4FAC081bf1f309aDC325306 sepolia
+OWNER: public(immutable(address))
+PRECISION: constant(uint256) = 1 * (10 ** 18)
+
+# Storage variables
 funders: public(DynArray[address, 1000])
+# funder -> how much they funded
+funders_to_amount_funded: public(HashMap[address, uint256])
 
 @deploy
 def __init__(price_feed_address: address):
-    self.minimum_usd = as_wei_value(5, "ether")
-    self.price_feed = AggregatorV3Interface(price_feed_address)
-    self.owner = msg.sender
+    PRICE_FEED = AggregatorV3Interface(price_feed_address)
+    OWNER = msg.sender
+
+@external
+@payable
+def __default__():
+    self._fund()
 
 @external
 @payable
 def fund():
+    self._fund()
+
+@internal
+@payable
+def _fund():
     """
     Allows users to send $ to this contract.
     """
     usd_value_of_eth: uint256 = self._get_eth_to_usd_rate(msg.value)
-    # assert msg.value >= as_wei_value(1, "ether"), "You must spend more ETH!"
-    assert usd_value_of_eth >= self.minimum_usd, "You must spend more ETH!"
+    assert usd_value_of_eth >= MINIMUN_USD, "You must spend more ETH!"
     self.funders.append(msg.sender)
+    self.funders_to_amount_funded[msg.sender] += msg.value
     
 
 @external
 def withdraw():
-    assert msg.sender == self.owner, "Only owner can withdraw"
-    send(self.owner, self.balance)
+    """
+    Take the money out of the contract, that people sent via the fund function.
+    How do we make sure we can pull the money out?
+    """
+    assert msg.sender == OWNER, "Not the contract owner!"
+    #send(OWNER, self.balance)
+    raw_call(OWNER, b"", value=self.balance)
+    #resetting
+    for funder: address in self.funders:
+        self.funders_to_amount_funded[funder] = 0
     self.funders = []
 
 # @external
@@ -56,7 +79,7 @@ def get_eth_to_usd_rate(eth_amount: uint256) -> uint256:
 @internal
 @view
 def _get_eth_to_usd_rate(eth_amount: uint256) -> uint256:
-    price: int256 = staticcall self.price_feed.latestAnswer() # 10**8
+    price: int256 = staticcall PRICE_FEED.latestAnswer() # 10**8
     eth_price: uint256 = convert(price, uint256) * (10 ** 10) # 10**8 * 10**10 -> 10**18 
-    eth_amount_in_usd: uint256 = (eth_amount * eth_price) // (1 * (10 ** 18)) # $ = ($/ETH * ETH_AMOUNT) / ETH
+    eth_amount_in_usd: uint256 = (eth_amount * eth_price) // PRECISION # $ = ($/ETH * ETH_AMOUNT) / ETH
     return eth_amount_in_usd
